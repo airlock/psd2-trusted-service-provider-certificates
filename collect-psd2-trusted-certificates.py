@@ -79,13 +79,13 @@ def _find_trusted_service_providers() -> Dict[str, list]:
     :return: dict of trusted service providers by country code
     """
     trusted_service_providers_by_country = {}
-    url = 'http://esignature.ec.europa.eu/efda/tl-browser/api/v1/search/tsp_list'
+    url = 'http://eidas.ec.europa.eu/efda/tl-browser/api/v1/search/tsp_list'
     resp = requests.get(url)
     _assert_status_code(resp.status_code, 200)
     for company in resp.json():
         for service in company['services']:
-            if any("QCertESeal" in s for s in service['qServiceTypes']) \
-                    or any("QWAC" in s for s in service['qServiceTypes']):
+            if any("Q_CERT_ESEAL" in s for s in service['serviceLegalTypes']) \
+                    or any("Q_WAC" in s for s in service['serviceLegalTypes']):
                 country_code = service['countryCode']
                 service_name = service['serviceName']
                 if country_code not in trusted_service_providers_by_country:
@@ -112,7 +112,7 @@ def _collect_certificates(country_code: str, service_names: list) -> Set[str]:
     :return: collection of x509 certificates as String
     """
     certificates = set()
-    url = f"http://esignature.ec.europa.eu/efda/tl-browser/api/v1/browser/download/{country_code}"
+    url = f"http://eidas.ec.europa.eu/efda/tl-browser/api/v1/browser/download/{country_code}"
     resp = requests.get(url)
     _assert_status_code(resp.status_code, 200)
     resp.encoding = "utf-8-sig"
@@ -182,3 +182,4 @@ if __name__ == '__main__':
     expired_cert_count = len(certs) - cert_count
     logging.info('Found %s valid certificates and %s expired certificates.', cert_count, expired_cert_count)
     write_certs_to_file(not_expired_certs, certificates_file_path)
+
