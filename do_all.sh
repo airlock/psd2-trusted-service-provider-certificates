@@ -2,14 +2,13 @@
 set -euo pipefail
 
 # Wrapper to run all certificate collection and processing steps.
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
 WEB_CERTS_FILE="eu_web.pem"
-POOL_CERTS_FILE="all_certs.pem"
-OUTPUT_CHAIN_FILE="chain.pem"
-MERGED_FILE="eIDAS_web.pem"
+POOL_CERTS_FILE="eu_all.pem"
+OUTPUT_CHAIN_FILE="eu_chain.pem"
+MERGED_FILE="eu_web_and_chain.pem"
 
 # Download and extract website authentication certificates (web bundle)
 ./get_web_certs.py "$WEB_CERTS_FILE" 2>>error.log

@@ -5,10 +5,8 @@ deduplicated bundle. It reads one or more input PEM files, removes duplicate
 certificates, and writes all unique certificates into a combined output file.
 """
 import os
-
-FILES = ["certs_web.pem", "chain.pem"]
-OUTPUT_FILE = "eIDAS_web.pem"
 import argparse
+
 
 def load_pem_certs(filename):
     if not os.path.exists(filename):
@@ -24,12 +22,11 @@ def load_pem_certs(filename):
         blocks.append(cert)
     return blocks
 
+
 def main():
     parser = argparse.ArgumentParser(description="Merge PEM files into a single deduplicated bundle.")
-    parser.add_argument('inputs', nargs='+',
-                        help=f"Input PEM files to merge (provide one or more)")
-    parser.add_argument('-o', '--output', dest='output', default=OUTPUT_FILE,
-                        help=f"Output filename (default: {OUTPUT_FILE})")
+    parser.add_argument("inputs", nargs="+", help="Input PEM files to merge (provide one or more)")
+    parser.add_argument("-o", "--output", required=True, help="Output filename (no default)")
     args = parser.parse_args()
 
     seen = set()
@@ -48,6 +45,6 @@ def main():
 
     print(f"Merged {len(merged)} unique certificates into {args.output} (from: {', '.join(args.inputs)})")
 
+
 if __name__ == "__main__":
     main()
-
