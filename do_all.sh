@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Wrapper to run all certificate collection and processing steps.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+WEB_CERTS_FILE="eu_web.pem"
+POOL_CERTS_FILE="all_certs.pem"
+OUTPUT_CHAIN_FILE="chain.pem"
+MERGED_FILE="eIDAS_web.pem"
+
+# Download and extract website authentication certificates (web bundle)
+./get_web_certs.py "$WEB_CERTS_FILE" 2>>error.log
+
+# Download all national TSLs and extract every available certificate (pool)
+./download_all_certs.py "$POOL_CERTS_FILE" 2>>error.log
+
+# Build certificate chains from web and pool bundles
+./download_chain.py "$WEB_CERTS_FILE" "$POOL_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log
+
+# Remove incomplete or invalid web certificates
+./delete_partial.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log
+
+# Merge cleaned web certificates and valid chains into final eIDAS bundle
+./merge.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" -o "$MERGED_FILE" 2>>error.log
