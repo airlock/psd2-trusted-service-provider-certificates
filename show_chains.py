@@ -69,6 +69,11 @@ def main():
         files_str = ", ".join(sorted(fp_to_files.get(fp, [])))
         print(f"LEAF ID={fp} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)} ({files_str})")
 
+        # Treat self-signed leaf as a complete chain (root)
+        if cert.issuer == cert.subject:
+            print("  Chain length: 1\n")
+            continue
+
         current_cert = cert
         chain = []
         incomplete = False
@@ -115,9 +120,10 @@ def main():
             print("  Chain not complete")
             print("  Chain length: NA\n")
         else:
-            total_chain_len = len(chain)  # includes leaf
+            total_chain_len = len(chain)
             print(f"  Chain length: {total_chain_len}\n")
 
 
 if __name__ == "__main__":
     main()
+
