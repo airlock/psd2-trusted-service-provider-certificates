@@ -26,11 +26,11 @@ def load_certs(filename: str):
         blocks.append(part + b'\n-----END CERTIFICATE-----\n')
     return blocks
 
-def get_issuer_dn(cert_pem: bytes) -> str:
-    """Return the issuer DN in RFC2253 format using pyOpenSSL."""
+def get_subject_dn(cert_pem: bytes) -> str:
+    """Return the subject DN in RFC2253 format using pyOpenSSL."""
     cert = crypto.load_certificate(crypto.FILETYPE_PEM, cert_pem)
     components = []
-    for name, value in cert.get_issuer().get_components():
+    for name, value in cert.get_subject().get_components():
         n = name.decode()
         v = value.decode()
         # Escape characters per RFC2253
@@ -51,16 +51,16 @@ def main():
         print(f'No certificates found in {sys.argv[1]}', file=sys.stderr)
         sys.exit(1)
 
-    print('# Apache mod_ssl directives for client certificate issuer DN checking')
+    print('# Restrict access to EU-qualified web clients by issuer DN')
 
     dn_conditions = []
     for block in cert_blocks:
-        dn = get_issuer_dn(block)
+        dn = get_subject_dn(block)
         if dn:
             dn_conditions.append(f"%{{SSL_CLIENT_I_DN}} eq '{dn}'")
 
     print('SSLRequire (\\')
-    print(' || \\\n'.join(f'    {c}' for c in dn_conditions) + ' \\')
+    print(' || \\\n'.join(f'    {c}' for c in sorted(dn_conditions)) + ' \\')
     print(')')
 
 if __name__ == '__main__':

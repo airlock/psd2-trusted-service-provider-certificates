@@ -47,7 +47,7 @@ After running `do_all.sh` and generating the merged certificate files, you can
 generate Apache SSLRequire directives based on the web certificates only:
 
 ```
-./get_apache_restrictions.py <eu_web_certificates>.pem
+./get_apache_restrictions.py eu_web.pem
 ```
 
 The output prints SSLRequire directives to standard output. Redirect the output 
