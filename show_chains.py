@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-This script analyzes and reconstructs X.509 certificate chains
-from two PEM files: one containing leaf (end-entity) certificates
+Analyze and reconstruct X.509 certificate chains from two PEM files:
+one containing leaf certificate authorities (not client certificates) 
 and another containing possible issuer or intermediate certificates.
-It identifies each leaf certificate, attempts to locate its issuer(s)
-from the provided chain file, prints the full chain hierarchy,
-and reports whether each chain is complete up to a trusted root.
+
+It prints complete chains first and incomplete chains last.
+All certificates use SKI as ID.
 """
 import argparse
 import os
@@ -13,9 +13,7 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 
-
 def load_certs(filename):
-    """Load certificates from a PEM file."""
     if not os.path.isfile(filename):
         return []
     with open(filename, "rb") as f:
@@ -33,18 +31,20 @@ def load_certs(filename):
             continue
     return certs
 
-
 def get_cn(cert):
-    """Get the Common Name (CN) of a certificate."""
     cn_attr = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
     return cn_attr[0].value if cn_attr else "Unknown CN"
 
-
 def get_issuer_cn(cert):
-    """Get the issuer's Common Name (CN) of a certificate."""
     cn_attr = cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
     return cn_attr[0].value if cn_attr else "Unknown CN"
 
+def get_ski(cert):
+    try:
+        ski = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
+        return ski.hex()
+    except Exception:
+        return cert.fingerprint(hashes.SHA1()).hex()
 
 def main():
     parser = argparse.ArgumentParser(description="Build certificate chains from two certificate files.")
@@ -55,32 +55,29 @@ def main():
     leaf_certs = load_certs(args.leaf_certs)
     chain_certs = load_certs(args.chain_certs)
 
-    # Map fingerprints to source files
-    fp_to_files = {}
+    ski_to_files = {}
     for file in [args.leaf_certs, args.chain_certs]:
         cert_list = load_certs(file)
         for cert, _ in cert_list:
-            fp = cert.fingerprint(hashes.SHA1()).hex()
-            fp_to_files.setdefault(fp, set()).add(file)
+            ski = get_ski(cert)
+            ski_to_files.setdefault(ski, set()).add(file)
 
-    # Process each leaf certificate
+    incomplete_chains = []
+
     for cert, _ in leaf_certs:
-        fp = cert.fingerprint(hashes.SHA1()).hex()
-        files_str = ", ".join(sorted(fp_to_files.get(fp, [])))
-        print(f"LEAF ID={fp} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)} ({files_str})")
+        leaf_ski = get_ski(cert)
+        files_str = ", ".join(sorted(ski_to_files.get(leaf_ski, [])))
+        print(f"LEAF ID={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)} ({files_str})")
 
-        # Treat self-signed leaf as a complete chain (root)
         if cert.issuer == cert.subject:
             print("  Chain length: 1\n")
             continue
 
         current_cert = cert
         chain = []
-        incomplete = False
         found_root = False
 
-        # Build chain
-        for _ in range(10):  # limit to prevent infinite loops
+        for _ in range(10):
             issuer_found = None
             for candidate, _ in chain_certs:
                 try:
@@ -91,38 +88,35 @@ def main():
                     continue
 
             if not issuer_found:
-                incomplete = True
                 break
 
-            try:
-                basic = issuer_found.extensions.get_extension_for_class(x509.BasicConstraints).value
-                is_root = issuer_found.subject == issuer_found.issuer and getattr(basic, 'ca', False)
-                pos = "ROOT" if is_root else "INTERMEDIATE"
-            except Exception:
-                pos = "INTERMEDIATE"
-                is_root = False
-
+            pos = "ROOT" if issuer_found.subject == issuer_found.issuer else "INTERMEDIATE"
             chain.append((pos, issuer_found))
             current_cert = issuer_found
 
-            if is_root:
+            if pos == "ROOT":
                 found_root = True
                 break
 
-        # Output the chain
-        for pos, c_chain in chain:
-            indent = "    " if pos == "ROOT" else ""
-            fp_chain = c_chain.fingerprint(hashes.SHA1()).hex()
-            files_chain = ", ".join(sorted(fp_to_files.get(fp_chain, [])))
-            print(f"{indent}{pos} ID={fp_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)} ({files_chain})")
-
-        if not found_root:
-            print("  Chain not complete")
-            print("  Chain length: NA\n")
+        if found_root:
+            for pos, c_chain in chain:
+                indent = "    " if pos == "ROOT" else ""
+                ski_chain = get_ski(c_chain)
+                files_chain = ", ".join(sorted(ski_to_files.get(ski_chain, [])))
+                print(f"{indent}{pos} ID={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)} ({files_chain})")
+            print(f"  Chain length: {len(chain) + 1}\n")
         else:
-            total_chain_len = len(chain)
-            print(f"  Chain length: {total_chain_len}\n")
+            incomplete_chains.append((cert, chain))
 
+    if incomplete_chains:
+        print("\nINCOMPLETE CHAINS:")
+        for cert, chain in incomplete_chains:
+            leaf_ski = get_ski(cert)
+            print(f"LEAF ID={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)}")
+            for pos, c_chain in chain:
+                ski_chain = get_ski(c_chain)
+                print(f"  {pos} ID={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)}")
+            print("  Chain not complete\n")
 
 if __name__ == "__main__":
     main()
