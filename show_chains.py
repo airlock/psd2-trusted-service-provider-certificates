@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
 Analyze and reconstruct X.509 certificate chains from two PEM files:
-one containing leaf certificate authorities (not client certificates) 
-and another containing possible issuer or intermediate certificates.
+one containing leaf certificates and another containing possible issuer
+or intermediate certificates.
 
 It prints complete chains first and incomplete chains last.
-All certificates use SKI as ID.
+All certificates use SKI as ID. Cycles and large bundles are handled efficiently.
 """
 import argparse
 import os
@@ -46,6 +46,13 @@ def get_ski(cert):
     except Exception:
         return cert.fingerprint(hashes.SHA1()).hex()
 
+def build_subject_map(certs):
+    """Map subjects to certificates for O(1) lookup during chain building"""
+    subject_map = {}
+    for cert, _ in certs:
+        subject_map[cert.subject.rfc4514_string()] = cert
+    return subject_map
+
 def main():
     parser = argparse.ArgumentParser(description="Build certificate chains from two certificate files.")
     parser.add_argument("leaf_certs", help="File containing leaf certificates (e.g., certs_web.pem)")
@@ -55,6 +62,8 @@ def main():
     leaf_certs = load_certs(args.leaf_certs)
     chain_certs = load_certs(args.chain_certs)
 
+    # Build quick lookup maps
+    subject_map = build_subject_map(chain_certs)
     ski_to_files = {}
     for file in [args.leaf_certs, args.chain_certs]:
         cert_list = load_certs(file)
@@ -76,23 +85,22 @@ def main():
         current_cert = cert
         chain = []
         found_root = False
+        seen_ski = set()
+        for _ in range(10):  # maximum depth
+            current_ski = get_ski(current_cert)
+            if current_ski in seen_ski:
+                # Detected cycle
+                break
+            seen_ski.add(current_ski)
 
-        for _ in range(10):
-            issuer_found = None
-            for candidate, _ in chain_certs:
-                try:
-                    if candidate.subject == current_cert.issuer and candidate != current_cert:
-                        issuer_found = candidate
-                        break
-                except Exception:
-                    continue
-
-            if not issuer_found:
+            issuer_dn = current_cert.issuer.rfc4514_string()
+            issuer_cert = subject_map.get(issuer_dn)
+            if not issuer_cert or issuer_cert == current_cert:
                 break
 
-            pos = "ROOT" if issuer_found.subject == issuer_found.issuer else "INTERMEDIATE"
-            chain.append((pos, issuer_found))
-            current_cert = issuer_found
+            pos = "ROOT" if issuer_cert.subject == issuer_cert.issuer else "INTERMEDIATE"
+            chain.append((pos, issuer_cert))
+            current_cert = issuer_cert
 
             if pos == "ROOT":
                 found_root = True
