@@ -8,8 +8,6 @@ Optional flags allow skipping QC filtering and certificate validity checks.
 
 import argparse
 import base64
-import datetime
-import json
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -17,12 +15,11 @@ from pathlib import Path
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
-from cryptography import x509
-from cryptography.hazmat.backends import default_backend
+
+from cert_lib import cert_is_valid_now, remove_duplicate_certs
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Constants
 LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 TARGET_EXT = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForWebSiteAuthentication"
 TIMEOUT = 30
@@ -54,29 +51,17 @@ def get_tsl_urls() -> list[str]:
         return []
 
 
-def cert_is_valid_today(cert_bytes: bytes) -> bool:
-    cert = x509.load_der_x509_certificate(cert_bytes, backend=default_backend())
-    now = datetime.datetime.utcnow()
-    return cert.not_valid_before <= now <= cert.not_valid_after
-
-
-def process_tsl(
-    tsl_url: str,
-    output_handle,
-    stats: dict,
-    no_qc: bool = False,
-    skip_validity_check: bool = False,
-) -> int:
+def process_tsl(tsl_url: str, stats: dict, no_qc: bool = False, skip_validity_check: bool = False) -> list[bytes]:
     try:
         content = download_xml(tsl_url)
         if not content:
-            return 0
+            return []
         root = ET.fromstring(content)
     except Exception as e:
         print(f"Error reading {tsl_url}: {e}", file=sys.stderr)
-        return 0
+        return []
 
-    saved_count = 0
+    pem_certs = []
 
     for service in root.findall(".//{*}TSPService"):
         svc_type_elem = service.find(".//{*}ServiceTypeIdentifier")
@@ -101,7 +86,7 @@ def process_tsl(
 
             if not skip_validity_check:
                 try:
-                    if not cert_is_valid_today(cert_bytes):
+                    if not cert_is_valid_now(cert_bytes):
                         continue
                 except Exception:
                     continue
@@ -118,10 +103,9 @@ def process_tsl(
                     + base64.encodebytes(cert_bytes)
                     + b"-----END CERTIFICATE-----\n"
                 )
-                output_handle.write(pem)
-                saved_count += 1
+                pem_certs.append(pem)
 
-    return saved_count
+    return pem_certs
 
 
 def main() -> None:
@@ -138,18 +122,24 @@ def main() -> None:
         sys.exit(1)
 
     stats = defaultdict(lambda: {"QC": 0, "Non-QC": 0})
-    total_saved = 0
+    all_certs = []
+
+    for url in tsl_urls:
+        pem_certs = process_tsl(url, stats, no_qc=args.no_qc_check, skip_validity_check=args.skip_validity_check)
+        all_certs.extend(pem_certs)
+        if args.verbose:
+            print(f"{len(pem_certs)} certs from {url}")
+
+    unique_certs = remove_duplicate_certs(all_certs)
 
     output_path = Path(args.output)
     with output_path.open("wb") as f:
-        for url in tsl_urls:
-            saved = process_tsl(url, f, stats, no_qc=args.no_qc_check, skip_validity_check=args.skip_validity_check)
-            total_saved += saved
-            if args.verbose:
-                print(f"{saved} certs from {url}")
+        for pem in unique_certs:
+            f.write(pem)
 
-    print(f"Saved {total_saved} EU web certificates into {args.output}.")
+    print(f"Saved {len(unique_certs)} unique EU web certificates into {args.output}.")
 
 
 if __name__ == "__main__":
     main()
+

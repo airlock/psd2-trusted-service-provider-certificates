@@ -17,7 +17,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 # Configurable URLs
 CERT_URLS = [
     "https://www.infonotary.com/en/files/qualified-root-ca.der",
-    "https://www.defensa.gob.es/pki/ca/DEFENSA-EC-RAIZ.cer"
+    "https://www.defensa.gob.es/pki/ca/DEFENSA-EC-RAIZ.cer",
+    "https://ssl-tools.net/certificates/8cf427fd790c3ad166068de81e57efbb932272d4.pem"
     # add more URLs here
 ]
 

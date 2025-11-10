@@ -20,6 +20,8 @@ import argparse
 import warnings
 import time
 
+from cert_lib import cert_is_valid_now, remove_duplicate_certs
+
 requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="Attribute's length must be >= 1 and <= 64, but it was")
 
@@ -97,6 +99,8 @@ def download_from_crtsh_by_ski(cert):
         print(f"  → Querying crt.sh for ski={ski_hex} (attempt {attempt})", file=sys.stderr, flush=True)
         try:
             r = requests.get(CRT_SH_API.format(ski_hex), timeout=30)
+            print(f"    crt.sh response: {r.text[:200]}...", file=sys.stderr, flush=True)
+
             if r.status_code != 200 or not r.text.strip():
                 reason = f"HTTP {r.status_code}" if r.status_code != 200 else "Empty result"
                 if attempt == retries:
@@ -115,7 +119,14 @@ def download_from_crtsh_by_ski(cert):
                 time.sleep(2)
                 continue
 
-            entry = next((e for e in entries if e.get("issuer_name") == e.get("common_name")), entries[0])
+            # Wähle das Zertifikat mit dem neuesten not_before-Datum
+            try:
+                entries = [e for e in entries if "not_before" in e]
+                entries.sort(key=lambda e: e["not_before"], reverse=True)
+                entry = entries[0]
+            except Exception:
+                entry = entries[0]
+
             pem_url = CRT_SH_DOWNLOAD.format(entry["id"])
             r2 = requests.get(pem_url, timeout=30)
             r2.raise_for_status()
@@ -195,13 +206,17 @@ def build_chain(cert, pool):
 
 
 def save_chain(chains, filename):
+    all_certs_pem = []
+    for chain in chains:
+        for cert in chain:
+            try:
+                all_certs_pem.append(cert.public_bytes(serialization.Encoding.PEM))
+            except Exception:
+                continue
+    unique_certs = remove_duplicate_certs(all_certs_pem)
     with open(filename, "wb") as f:
-        for chain in chains:
-            for cert in chain:
-                try:
-                    f.write(cert.public_bytes(serialization.Encoding.PEM))
-                except Exception:
-                    continue
+        for pem in unique_certs:
+            f.write(pem)
 
 
 def main():

@@ -13,13 +13,14 @@ import os
 import sys
 import warnings
 
+from cert_lib import cert_is_valid_now, remove_duplicate_certs
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 
 
 def download_xml(url):
-    """Downloads XML content with timeout and no certificate verification."""
     r = requests.get(url, verify=False, timeout=30)
     r.raise_for_status()
     return r.content
@@ -58,82 +59,44 @@ def get_tsl_urls():
     ]
 
 
-def download_all_certs(output_file):
-    """Downloads certificates from all TSLs and writes them to a PEM file.
-
-    Returns (downloaded_count, failed_certs, tsl_count)
-    """
+def download_all_certs():
     tsl_urls = get_tsl_urls()
-    tsl_count = len(tsl_urls)
-    count = 0
-    failed_certs = 0
-    with open(output_file, "wb") as f:
-        for url in tsl_urls:
-            try:
-                content = download_xml(url)
-                root = ET.fromstring(content)
-            except Exception as e:
-                print(f"Error processing {url}: {e}", file=sys.stderr)
-                continue
+    all_pems = []
 
-            for cert_elem in root.findall(".//{*}X509Certificate"):
-                if not cert_elem.text:
-                    continue
-                try:
-                    cert_bytes = base64.b64decode(cert_elem.text)
-                    pem = (
-                        b"-----BEGIN CERTIFICATE-----\n"
-                        + base64.encodebytes(cert_bytes)
-                        + b"-----END CERTIFICATE-----\n"
-                    )
-                    f.write(pem)
-                    count += 1
-                except Exception as e:
-                    print(f"Error decoding certificate: {e}", file=sys.stderr)
-                    try:
-                        pem_like = (
-                            b"-----BEGIN CERTIFICATE-----\n"
-                            + cert_elem.text.encode('utf-8')
-                            + b"\n-----END CERTIFICATE-----\n"
-                        )
-                        _log_cert_bytes(pem_like)
-                    except Exception:
-                        pass
-                    failed_certs += 1
-
-    return count, failed_certs, tsl_count
-
-
-def load_certs(filename):
-    certs = []
-    failed_certs = 0
-    if not os.path.exists(filename):
-        return certs, failed_certs
-
-    with open(filename, "rb") as f:
-        pem_data = f.read()
-
-    blocks = pem_data.split(b"-----END CERTIFICATE-----")
-    for block in blocks:
-        block = block.strip()
-        if not block:
-            continue
-        block_with_end = b"-----END CERTIFICATE-----"
+    for url in tsl_urls:
         try:
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                cert = x509.load_pem_x509_certificate(block + block_with_end, default_backend())
-                certs.append(cert)
-                for warn in w:
-                    msg = str(warn.message)
-                    if "The parsed certificate contains a NULL parameter value in its signature algorithm parameters." in msg:
-                        continue
-                    if "NULL parameter value" in msg or "signature algorithm parameters" in msg:
-                        _log_warning_and_cert(f"Warning while loading certificate: {msg}", block + b"\n" + block_with_end)
+            content = download_xml(url)
+            root = ET.fromstring(content)
         except Exception as e:
-            failed_certs += 1
-            _log_warning_and_cert(f"Failed to load certificate: {str(e)}", block + b"\n" + block_with_end)
-    return certs, failed_certs
+            print(f"Error processing {url}: {e}", file=sys.stderr)
+            continue
+
+        for cert_elem in root.findall(".//{*}X509Certificate"):
+            if not cert_elem.text:
+                continue
+            try:
+                cert_bytes = base64.b64decode(cert_elem.text)
+                if not cert_is_valid_now(cert_bytes):
+                    continue
+                pem = (
+                    b"-----BEGIN CERTIFICATE-----\n"
+                    + base64.encodebytes(cert_bytes)
+                    + b"-----END CERTIFICATE-----\n"
+                )
+                all_pems.append(pem)
+            except Exception as e:
+                print(f"Error decoding certificate: {e}", file=sys.stderr)
+                try:
+                    pem_like = (
+                        b"-----BEGIN CERTIFICATE-----\n"
+                        + cert_elem.text.encode('utf-8')
+                        + b"\n-----END CERTIFICATE-----\n"
+                    )
+                    _log_cert_bytes(pem_like)
+                except Exception:
+                    pass
+
+    return remove_duplicate_certs(all_pems)
 
 
 def main():
@@ -142,12 +105,15 @@ def main():
         sys.exit(1)
 
     output_file = sys.argv[1]
-    count, failed_certs_download, tsl_count = download_all_certs(output_file)
-    all_certs, failed_certs_load = load_certs(output_file)
-    failed_certs = failed_certs_download + failed_certs_load
-    # Single-line summary: processed TSLs, downloaded count, failed loads
-    print(f"Downloaded {count} certificates into {output_file} (to construct the CA chains). Failed to load {failed_certs} certificates.")
+    unique_certs = download_all_certs()
+
+    with open(output_file, "wb") as f:
+        for pem in unique_certs:
+            f.write(pem)
+
+    print(f"Saved {len(unique_certs)} unique certificates into {output_file}.")
 
 
 if __name__ == "__main__":
     main()
+
