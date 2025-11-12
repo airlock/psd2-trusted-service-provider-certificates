@@ -44,7 +44,7 @@ def get_tsl_urls() -> list[str]:
         return [
             tsl_loc.text.strip()
             for tsl_loc in root.findall(".//{*}TSLLocation")
-            if tsl_loc.text and tsl_loc.text.lower().endswith(".xml")
+            if tsl_loc.text and tsl_loc.text.lower().endswith((".xml", ".xtsl"))
         ]
     except Exception as e:
         print(f"Failed to parse LOTL XML: {e}", file=sys.stderr)
