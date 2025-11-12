@@ -3,6 +3,7 @@
 Print all Distinguished Names (DNs) from a PEM file containing one or more
 X.509 certificates. Output is normalized for easy comparison.
 Additionally, prints subjects outside EU/EWR countries at the end.
+Also prints certificate validity (not_before / not_after).
 """
 
 import os
@@ -10,7 +11,6 @@ import sys
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
-# OID -> short name mapping for consistent display
 OID_ORDER = [
     x509.NameOID.COUNTRY_NAME,
     x509.NameOID.STATE_OR_PROVINCE_NAME,
@@ -33,7 +33,6 @@ OID_LABELS = {
     x509.NameOID.SERIAL_NUMBER: "SERIAL",
 }
 
-# EU/EWR country codes
 EU_EWR_COUNTRIES = {
     "AT","BE","BG","HR","CY","CZ","DK","EE","FI","FR","DE","GR",
     "HU","IS","IE","IT","LV","LI","LT","LU","MT","NL","NO","PL",
@@ -42,7 +41,6 @@ EU_EWR_COUNTRIES = {
 
 
 def load_certs(pem_file):
-    """Load all certificates from a PEM file."""
     if not os.path.isfile(pem_file):
         print(f"Error: file not found: {pem_file}", file=sys.stderr)
         sys.exit(1)
@@ -65,14 +63,12 @@ def load_certs(pem_file):
 
 
 def safe_format_dn(name):
-    """Safely return DN components in consistent order."""
     try:
         attrs = {attr.oid: attr.value for attr in name}
         parts = []
         for oid in OID_ORDER:
             if oid in attrs:
                 parts.append(f"{OID_LABELS[oid]}={attrs[oid]}")
-        # Include any other OIDs not in our known list
         for attr in name:
             if attr.oid not in OID_ORDER:
                 parts.append(f"{attr.oid.dotted_string}={attr.value}")
@@ -108,9 +104,13 @@ def main():
             issuer = f"(issuer parse error: {e})"
 
         print(f"  Subject: {subj}")
-        print(f"  Issuer : {issuer}\n")
+        print(f"  Issuer : {issuer}")
+        try:
+            print(f"  Valid  : {cert.not_valid_before_utc.isoformat()}  →  {cert.not_valid_after_utc.isoformat()}")
+        except AttributeError:
+            print(f"  Valid  : {cert.not_valid_before.isoformat()}  →  {cert.not_valid_after.isoformat()}")
+        print()
 
-        # Check country outside EU/EWR
         try:
             country = cert.subject.get_attributes_for_oid(x509.NameOID.COUNTRY_NAME)
             if country:

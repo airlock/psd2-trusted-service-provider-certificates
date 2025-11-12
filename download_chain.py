@@ -4,32 +4,22 @@
 Build complete X.509 certificate chains using:
 - Local certificate pool
 - Authority Information Access (AIA)
-- crt.sh API fallback
-
-Retries up to 3 times for crt.sh. Reports SKIs that could not be downloaded.
+- Only currently valid certificates
 """
 
 import os
-import sys
 import requests
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
-from cryptography.hazmat.primitives import serialization, hashes
+from cryptography.hazmat.primitives import serialization
 from cryptography.x509.oid import ExtensionOID
 import argparse
 import warnings
-import time
 
-from cert_lib import cert_is_valid_now, remove_duplicate_certs
+from cert_lib import remove_duplicate_certs, cert_is_valid_now
 
 requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="Attribute's length must be >= 1 and <= 64, but it was")
-
-CRT_SH_API = "https://crt.sh/?ski={}&output=json"
-CRT_SH_DOWNLOAD = "https://crt.sh/?d={}"
-
-crtsh_cache = {}
-failed_crtsh = {}  # ski -> reason
 
 
 def load_certs(filename):
@@ -43,6 +33,8 @@ def load_certs(filename):
         if not cert_pem:
             continue
         cert_pem += b"\n-----END CERTIFICATE-----\n"
+        if not cert_is_valid_now(cert_pem):
+            continue
         try:
             cert = x509.load_pem_x509_certificate(cert_pem, default_backend())
             certs.append(cert)
@@ -61,6 +53,8 @@ def download_aia(url):
         r = requests.get(url, timeout=30, verify=False)
         r.raise_for_status()
         data = r.content
+        if not cert_is_valid_now(data):
+            return None
         try:
             return x509.load_pem_x509_certificate(data, default_backend())
         except Exception:
@@ -79,130 +73,52 @@ def find_issuer(cert, pool):
     return None
 
 
-def download_from_crtsh_by_ski(cert):
+def get_aia_urls(cert):
+    urls = []
     try:
-        aki_ext = cert.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_KEY_IDENTIFIER)
-        key_id = aki_ext.value.key_identifier
-        if not key_id:
-            failed_crtsh["UNKNOWN"] = "No AKI key identifier"
-            return None
-        ski_hex = key_id.hex()
+        aia_ext = cert.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_INFORMATION_ACCESS)
+        urls = [
+            access.access_location.value
+            for access in aia_ext.value
+            if access.access_method.dotted_string == "1.3.6.1.5.5.7.48.2"
+        ]
+    except x509.ExtensionNotFound:
+        pass
     except Exception:
-        failed_crtsh["UNKNOWN"] = "No AKI extension"
-        return None
-
-    if ski_hex in crtsh_cache:
-        return crtsh_cache[ski_hex]
-
-    retries = 3
-    for attempt in range(1, retries + 1):
-        print(f"  → Querying crt.sh for ski={ski_hex} (attempt {attempt})", file=sys.stderr, flush=True)
-        try:
-            r = requests.get(CRT_SH_API.format(ski_hex), timeout=30)
-            print(f"    crt.sh response: {r.text[:200]}...", file=sys.stderr, flush=True)
-
-            if r.status_code != 200 or not r.text.strip():
-                reason = f"HTTP {r.status_code}" if r.status_code != 200 else "Empty result"
-                if attempt == retries:
-                    failed_crtsh[ski_hex] = reason
-                    crtsh_cache[ski_hex] = None
-                    return None
-                time.sleep(2)
-                continue
-
-            entries = r.json()
-            if not entries:
-                if attempt == retries:
-                    failed_crtsh[ski_hex] = "No entries in crt.sh"
-                    crtsh_cache[ski_hex] = None
-                    return None
-                time.sleep(2)
-                continue
-
-            # Wähle das Zertifikat mit dem neuesten not_before-Datum
-            try:
-                entries = [e for e in entries if "not_before" in e]
-                entries.sort(key=lambda e: e["not_before"], reverse=True)
-                entry = entries[0]
-            except Exception:
-                entry = entries[0]
-
-            pem_url = CRT_SH_DOWNLOAD.format(entry["id"])
-            r2 = requests.get(pem_url, timeout=30)
-            r2.raise_for_status()
-            data = r2.content
-            try:
-                cert_obj = x509.load_pem_x509_certificate(data, default_backend())
-            except Exception:
-                cert_obj = x509.load_der_x509_certificate(data, default_backend())
-
-            crtsh_cache[ski_hex] = cert_obj
-            return cert_obj
-
-        except Exception as e:
-            if attempt == retries:
-                failed_crtsh[ski_hex] = str(e)
-                crtsh_cache[ski_hex] = None
-                return None
-            time.sleep(2)
-
-    crtsh_cache[ski_hex] = None
-    return None
+        pass
+    return urls
 
 
-def build_chain(cert, pool):
+def build_chain(cert, pool, disable_aia=False):
     chain = [cert]
-    current = cert
-    aia_total = pool_total = crtsh_total = 0
+    to_check = [cert]
+    aia_total = pool_total = 0
 
-    while True:
+    while to_check:
+        current = to_check.pop()
         issuer_cert = None
 
-        try:
-            aia_ext = current.extensions.get_extension_for_oid(ExtensionOID.AUTHORITY_INFORMATION_ACCESS)
-            aia_urls = [
-                access.access_location.value
-                for access in aia_ext.value
-                if access.access_method.dotted_string == "1.3.6.1.5.5.7.48.2"
-            ]
-            for url in aia_urls:
+        # Prüfe AIA URLs (nur falls nicht deaktiviert)
+        if not disable_aia:
+            for url in get_aia_urls(current):
                 candidate = download_aia(url)
-                if candidate:
+                if candidate and candidate not in pool:
+                    pool.append(candidate)
+                    to_check.append(candidate)
                     aia_total += 1
-                    pool_candidate = find_issuer(candidate, pool)
-                    if pool_candidate:
-                        issuer_cert = pool_candidate
-                        pool_total += 1
-                    else:
-                        issuer_cert = candidate
-                        pool.append(candidate)
-                    break
-        except x509.ExtensionNotFound:
-            pass
-        except Exception:
-            pass
 
-        if issuer_cert is None:
-            issuer_cert = find_issuer(current, pool)
-            if issuer_cert:
-                pool_total += 1
+        # Prüfe Pool auf passenden Issuer
+        issuer_cert = find_issuer(current, pool)
+        if issuer_cert and issuer_cert not in chain:
+            chain.append(issuer_cert)
+            to_check.append(issuer_cert)
+            pool_total += 1
 
-        if issuer_cert is None:
-            candidate = download_from_crtsh_by_ski(current)
-            if candidate:
-                crtsh_total += 1
-                pool.append(candidate)
-                current = candidate
-                continue
-            else:
-                break
+        # Stop if self-signed root
+        if issuer_cert and issuer_cert.subject == issuer_cert.issuer:
+            continue
 
-        chain.append(issuer_cert)
-        if issuer_cert.subject == issuer_cert.issuer:
-            break
-        current = issuer_cert
-
-    return chain, aia_total, pool_total, crtsh_total
+    return chain, aia_total, pool_total
 
 
 def save_chain(chains, filename):
@@ -210,7 +126,9 @@ def save_chain(chains, filename):
     for chain in chains:
         for cert in chain:
             try:
-                all_certs_pem.append(cert.public_bytes(serialization.Encoding.PEM))
+                pem_bytes = cert.public_bytes(serialization.Encoding.PEM)
+                if cert_is_valid_now(pem_bytes):
+                    all_certs_pem.append(pem_bytes)
             except Exception:
                 continue
     unique_certs = remove_duplicate_certs(all_certs_pem)
@@ -220,42 +138,34 @@ def save_chain(chains, filename):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Build certificate chains with AIA, local pool, and crt.sh fallback (cached).")
+    parser = argparse.ArgumentParser(
+        description="Build certificate chains with recursive AIA and local pool processing, only valid certificates."
+    )
     parser.add_argument('web_certs', help="File containing web certificates")
     parser.add_argument('pool_certs', help="File containing pool certificates")
     parser.add_argument('output', help="Output file for full chains")
-    parser.add_argument('--skip-crtsh', action='store_true', help="Skip crt.sh lookups")
+    parser.add_argument('--no-aia', action='store_true', help="Disable AIA certificate downloading")
     args = parser.parse_args()
 
     web_certs = load_certs(args.web_certs)
     pool_certs = load_certs(args.pool_certs)
     if not web_certs:
-        print(f"No web certificates found in {args.web_certs}.")
+        print(f"No valid web certificates found in {args.web_certs}.")
         return
 
-    if args.skip_crtsh:
-        global download_from_crtsh_by_ski
-        download_from_crtsh_by_ski = lambda cert: None
-
     all_chains = []
-    aia_total = pool_total = crtsh_total = 0
+    aia_total = pool_total = 0
 
     for cert in web_certs:
-        chain, aia_count, pool_count, crtsh_count = build_chain(cert, pool_certs)
+        chain, aia_count, pool_count = build_chain(cert, pool_certs, disable_aia=args.no_aia)
         all_chains.append(chain)
         aia_total += aia_count
         pool_total += pool_count
-        crtsh_total += crtsh_count
 
     save_chain(all_chains, args.output)
     print(f"Downloaded {aia_total} certificates from AIA, "
-          f"{pool_total} from pool, {crtsh_total} from crt.sh. "
-          f"Saved chains to {args.output}.")
-
-    if failed_crtsh:
-        print("\nSKIs not downloaded from crt.sh:")
-        for ski, reason in failed_crtsh.items():
-            print(f"  {ski}: {reason}")
+          f"{pool_total} from pool. "
+          f"Saved valid chains to {args.output}.")
 
 
 if __name__ == "__main__":

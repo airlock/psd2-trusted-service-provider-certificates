@@ -17,20 +17,20 @@ MERGED_FILE="eu_web_and_chain.pem"
 ./download_all_certs.py "$POOL_CERTS_FILE" 2>>error.log
 
 # Add some predownloaded certificates that cannot be found via public API
-cat chain_missing.pem >> "$POOL_CERTS_FILE"
+cat eu_chain_missing.pem >> "$POOL_CERTS_FILE"
 
 # Build certificate chains from web and pool bundles
 ./download_chain.py "$WEB_CERTS_FILE" "$POOL_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log
 
 # Show incomplete chains only
-INCOMPLETE_CHAINS=$(./show_chains.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log | grep -A 10 "INCOMPLETE CHAINS:" || true)
+INCOMPLETE_CHAINS=$(./show_chains.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log | awk '/INCOMPLETE CHAINS:/ {flag=1; next} flag')
 if [[ -n "$INCOMPLETE_CHAINS" ]]; then
     echo "Incomplete certificate chains detected:"
     echo "$INCOMPLETE_CHAINS"
 fi
 
 # Remove incomplete or invalid web certificates
-./delete_partial.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log
+#./delete_partial.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log
 
 # Merge cleaned web certificates and valid chains into final EU bundle
 ./merge.py "$WEB_CERTS_FILE" "$OUTPUT_CHAIN_FILE" -o "$MERGED_FILE" 2>>error.log
