@@ -13,38 +13,18 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 
-def load_certs(filename):
-    if not os.path.isfile(filename):
-        return []
-    with open(filename, "rb") as f:
-        pem_data = f.read()
-    certs = []
-    for cert_block in pem_data.split(b"-----END CERTIFICATE-----"):
-        cert_block = cert_block.strip()
-        if not cert_block:
-            continue
-        cert_block += b"\n-----END CERTIFICATE-----\n"
-        try:
-            x509_cert = x509.load_pem_x509_certificate(cert_block, default_backend())
-            certs.append((x509_cert, filename))
-        except Exception:
-            continue
-    return certs
+from cert_lib import load_pem_file, get_subject_key_identifier, get_common_name
+
 
 def get_cn(cert):
-    cn_attr = cert.subject.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
-    return cn_attr[0].value if cn_attr else "Unknown CN"
+    """Get Common Name from certificate subject."""
+    return get_common_name(cert.subject, default="Unknown CN")
+
 
 def get_issuer_cn(cert):
-    cn_attr = cert.issuer.get_attributes_for_oid(x509.NameOID.COMMON_NAME)
-    return cn_attr[0].value if cn_attr else "Unknown CN"
+    """Get Common Name from certificate issuer."""
+    return get_common_name(cert.issuer, default="Unknown CN")
 
-def get_ski(cert):
-    try:
-        ski = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
-        return ski.hex()
-    except Exception:
-        return cert.fingerprint(hashes.SHA1()).hex()
 
 def build_subject_map(certs):
     """Map subjects to certificates for O(1) lookup during chain building"""
@@ -59,22 +39,22 @@ def main():
     parser.add_argument("chain_certs", help="File containing chain certificates (e.g., chain.pem)")
     args = parser.parse_args()
 
-    leaf_certs = load_certs(args.leaf_certs)
-    chain_certs = load_certs(args.chain_certs)
+    leaf_certs = load_pem_file(args.leaf_certs, as_objects=True, include_source=True)
+    chain_certs = load_pem_file(args.chain_certs, as_objects=True, include_source=True)
 
     # Build quick lookup maps
     subject_map = build_subject_map(chain_certs)
     ski_to_files = {}
     for file in [args.leaf_certs, args.chain_certs]:
-        cert_list = load_certs(file)
+        cert_list = load_pem_file(file, as_objects=True, include_source=True)
         for cert, _ in cert_list:
-            ski = get_ski(cert)
+            ski = get_subject_key_identifier(cert)
             ski_to_files.setdefault(ski, set()).add(file)
 
     incomplete_chains = []
 
     for cert, _ in leaf_certs:
-        leaf_ski = get_ski(cert)
+        leaf_ski = get_subject_key_identifier(cert)
         files_str = ", ".join(sorted(ski_to_files.get(leaf_ski, [])))
         print(f"LEAF ID={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)} ({files_str})")
 
@@ -87,7 +67,7 @@ def main():
         found_root = False
         seen_ski = set()
         for _ in range(10):  # maximum depth
-            current_ski = get_ski(current_cert)
+            current_ski = get_subject_key_identifier(current_cert)
             if current_ski in seen_ski:
                 # Detected cycle
                 break
@@ -109,7 +89,7 @@ def main():
         if found_root:
             for pos, c_chain in chain:
                 indent = "    " if pos == "ROOT" else ""
-                ski_chain = get_ski(c_chain)
+                ski_chain = get_subject_key_identifier(c_chain)
                 files_chain = ", ".join(sorted(ski_to_files.get(ski_chain, [])))
                 print(f"{indent}{pos} ID={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)} ({files_chain})")
             print(f"  Chain length: {len(chain) + 1}\n")
@@ -119,10 +99,10 @@ def main():
     if incomplete_chains:
         print("\nINCOMPLETE CHAINS:")
         for cert, chain in incomplete_chains:
-            leaf_ski = get_ski(cert)
+            leaf_ski = get_subject_key_identifier(cert)
             print(f"LEAF ID={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)}")
             for pos, c_chain in chain:
-                ski_chain = get_ski(c_chain)
+                ski_chain = get_subject_key_identifier(c_chain)
                 print(f"  {pos} ID={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)}")
             print("  Chain not complete\n")
 

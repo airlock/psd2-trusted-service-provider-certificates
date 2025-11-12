@@ -11,6 +11,8 @@ import sys
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 
+from cert_lib import load_pem_file
+
 OID_ORDER = [
     x509.NameOID.COUNTRY_NAME,
     x509.NameOID.STATE_OR_PROVINCE_NAME,
@@ -40,28 +42,6 @@ EU_EWR_COUNTRIES = {
 }
 
 
-def load_certs(pem_file):
-    if not os.path.isfile(pem_file):
-        print(f"Error: file not found: {pem_file}", file=sys.stderr)
-        sys.exit(1)
-
-    with open(pem_file, "rb") as f:
-        data = f.read()
-
-    certs = []
-    for block in data.split(b"-----END CERTIFICATE-----"):
-        block = block.strip()
-        if not block:
-            continue
-        block += b"\n-----END CERTIFICATE-----\n"
-        try:
-            cert = x509.load_pem_x509_certificate(block, default_backend())
-            certs.append(cert)
-        except Exception:
-            continue
-    return certs
-
-
 def safe_format_dn(name):
     try:
         attrs = {attr.oid: attr.value for attr in name}
@@ -83,7 +63,11 @@ def main():
         sys.exit(1)
 
     pem_file = sys.argv[1]
-    certs = load_certs(pem_file)
+    if not os.path.isfile(pem_file):
+        print(f"Error: file not found: {pem_file}", file=sys.stderr)
+        sys.exit(1)
+
+    certs = load_pem_file(pem_file, as_objects=True)
 
     if not certs:
         print("No certificates found.")

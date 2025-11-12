@@ -16,13 +16,7 @@ from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
 
-def get_ski(cert):
-    """Return Subject Key Identifier (SKI) in hex, or SHA1 fingerprint if SKI missing"""
-    try:
-        ski = cert.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value.digest
-        return ski.hex()
-    except Exception:
-        return cert.fingerprint(hashes.SHA1()).hex()
+from cert_lib import get_subject_key_identifier
 
 def main():
     parser = argparse.ArgumentParser(description="Remove web certificates with incomplete chains from a PEM bundle.")
@@ -77,7 +71,7 @@ def main():
         block += b"\n-----END CERTIFICATE-----\n"
         try:
             cert = x509.load_pem_x509_certificate(block, default_backend())
-            cert_id = get_ski(cert)
+            cert_id = get_subject_key_identifier(cert)
             if cert_id not in incomplete_ids:
                 kept_blocks.append(block)
         except Exception:

@@ -16,51 +16,15 @@ from cryptography.x509.oid import ExtensionOID
 import argparse
 import warnings
 
-from cert_lib import remove_duplicate_certs, cert_is_valid_now
+from cert_lib import (
+    remove_duplicate_certs,
+    cert_is_valid_now,
+    load_pem_file,
+    download_with_retry,
+)
 
 requests.packages.urllib3.disable_warnings(requests.packages.urllib3.exceptions.InsecureRequestWarning)
 warnings.filterwarnings("ignore", message="Attribute's length must be >= 1 and <= 64, but it was")
-
-
-def load_certs(filename):
-    certs = []
-    if not os.path.exists(filename):
-        return certs
-    with open(filename, "rb") as f:
-        pem_data = f.read()
-    for cert_pem in pem_data.split(b"-----END CERTIFICATE-----"):
-        cert_pem = cert_pem.strip()
-        if not cert_pem:
-            continue
-        cert_pem += b"\n-----END CERTIFICATE-----\n"
-        if not cert_is_valid_now(cert_pem):
-            continue
-        try:
-            cert = x509.load_pem_x509_certificate(cert_pem, default_backend())
-            certs.append(cert)
-        except Exception:
-            continue
-    return certs
-
-
-def download_aia(url):
-    if not isinstance(url, str):
-        return None
-    url = url.strip()
-    if not url.lower().startswith(("http://", "https://")):
-        return None
-    try:
-        r = requests.get(url, timeout=30, verify=False)
-        r.raise_for_status()
-        data = r.content
-        if not cert_is_valid_now(data):
-            return None
-        try:
-            return x509.load_pem_x509_certificate(data, default_backend())
-        except Exception:
-            return x509.load_der_x509_certificate(data, default_backend())
-    except Exception:
-        return None
 
 
 def find_issuer(cert, pool):
@@ -101,11 +65,17 @@ def build_chain(cert, pool, disable_aia=False):
         # Prüfe AIA URLs (nur falls nicht deaktiviert)
         if not disable_aia:
             for url in get_aia_urls(current):
-                candidate = download_aia(url)
+                candidate = download_with_retry(url, as_certificate=True)
                 if candidate and candidate not in pool:
-                    pool.append(candidate)
-                    to_check.append(candidate)
-                    aia_total += 1
+                    # Validate before adding
+                    try:
+                        pem_bytes = candidate.public_bytes(serialization.Encoding.PEM)
+                        if cert_is_valid_now(pem_bytes):
+                            pool.append(candidate)
+                            to_check.append(candidate)
+                            aia_total += 1
+                    except Exception:
+                        continue
 
         # Prüfe Pool auf passenden Issuer
         issuer_cert = find_issuer(current, pool)
@@ -147,8 +117,8 @@ def main():
     parser.add_argument('--no-aia', action='store_true', help="Disable AIA certificate downloading")
     args = parser.parse_args()
 
-    web_certs = load_certs(args.web_certs)
-    pool_certs = load_certs(args.pool_certs)
+    web_certs = load_pem_file(args.web_certs, only_valid=True, as_objects=True)
+    pool_certs = load_pem_file(args.pool_certs, only_valid=True, as_objects=True)
     if not web_certs:
         print(f"No valid web certificates found in {args.web_certs}.")
         return

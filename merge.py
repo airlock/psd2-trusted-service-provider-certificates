@@ -5,21 +5,7 @@ removing duplicate certificates.
 """
 import os
 import argparse
-from cert_lib import remove_duplicate_certs
-
-def load_pem_certs(filename):
-    if not os.path.exists(filename):
-        return []
-    with open(filename, "rb") as f:
-        pem_data = f.read()
-    blocks = []
-    for cert in pem_data.split(b"-----END CERTIFICATE-----"):
-        cert = cert.strip()
-        if not cert:
-            continue
-        cert += b"\n-----END CERTIFICATE-----\n"
-        blocks.append(cert)
-    return blocks
+from cert_lib import remove_duplicate_certs, load_pem_file
 
 def main():
     parser = argparse.ArgumentParser(description="Merge PEM files into a single deduplicated bundle.")
@@ -29,7 +15,7 @@ def main():
 
     all_certs = []
     for file in args.inputs:
-        all_certs.extend(load_pem_certs(file))
+        all_certs.extend(load_pem_file(file))
 
     unique_certs = remove_duplicate_certs(all_certs)
 
