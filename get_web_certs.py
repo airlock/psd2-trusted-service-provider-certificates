@@ -23,15 +23,16 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 TARGET_EXT = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForWebSiteAuthentication"
 TIMEOUT = 30
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 
 def download_xml(url: str) -> bytes:
     try:
-        r = requests.get(url, verify=False, timeout=TIMEOUT)
+        r = requests.get(url, verify=False, timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
         r.raise_for_status()
         return r.content
     except Exception as e:
-        print(f"Failed to download {url}: {e}", file=sys.stderr)
+        print(f"WARNING: Failed to download {url}: {e}")
         return b""
 
 
