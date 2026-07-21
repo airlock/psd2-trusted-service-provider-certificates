@@ -1,36 +1,39 @@
-# EU Web Certificates Restrictions
+# EU PSD2 Client Certificate CAs
 
 ## Purpose
-The European Payment Services Directive relies on PKI technology for security. 
-To establish trust, all participants are required to verify each other's 
-certificates. To perform this verification, the CA certificate that issued the 
-participant's certificate is needed. This software provides a convenient way 
-for system administrators to download all CA certificates required in PSD2 
-verifications.
+Under the European Payment Services Directive (PSD2), participants
+authenticate each other with certificates issued by EU-qualified CAs. To
+verify such client certificates, a server needs the certificates of the
+issuing CAs. Airlock Gateway can be used for this verification; its
+configuration is described below.
 
-It's important to download the entire certificate chain because many tools, 
-including OpenSSL, validate the full chain by default. This collection 
-specifically focuses on certificates issued by EU-qualified CAs for web 
-authentication, indicated by the EU-defined `ForWebSiteAuthentication` 
-extension (an attribute of the CA, not the individual certificate).
+The European Commission publishes the List of Trusted Lists (LOTL) at
+<https://ec.europa.eu/tools/lotl/eu-lotl.xml>. It points to the national
+trusted list of each member state, which contains the CAs qualified in that
+country. A human readable view is available in the
+[EU Trust List Browser](https://eidas.ec.europa.eu/efda/tl-browser/).
 
-In addition, this repository includes a method to generate Apache `SSLRequire` 
-directives using the issuer DNs from the downloaded EU web certificates. This 
-allows configuring access in a `<Location>` context without accepting arbitrary 
-certificate chains from other roots, which could otherwise introduce security 
-risks by allowing any chain ending in a common root CA.
+The scripts in this repository download the LOTL, follow it to all national
+trusted lists and extract only the CA certificates marked for website
+authentication (services with the `ForWebSiteAuthentication` extension),
+plus the intermediate and root certificates needed to complete their chains.
+Downloading only these CAs keeps the bundle small. This matters because the
+names of the configured CAs are sent to the client in the TLS handshake:
+different clients impose different limits on the total size of the handshake,
+and RFC 8446 limits the size of the transferred name list to 65535 bytes.
 
 ## Certificate Chain Construction
-The certificate chain is built using the **Authority Information Access (AIA)** 
-extensions, which provide URLs to the issuer’s certificate. If the AIA URLs are 
-not available, the issuer certificate is searched in a local pool and, if 
-necessary, via public sources such as `crt.sh`. The process continues until the 
-root certificate is found, completing the chain from the web certificate to the 
-root CA certificate.
+The certificate chain is built using the **Authority Information Access (AIA)**
+extensions, which provide URLs to the issuer's certificate. Since not every
+certificate can be found this way, the issuer is also searched among all
+certificates of the national trusted lists and in `eu_chain_missing.pem`, a
+manually collected set of certificates that are neither downloadable via AIA
+nor contained in the trusted lists. The process continues until the root
+certificate is found.
 
-Usage
+## Usage
 
-Python 3 or higher is required, along with the libraries listed in 
+Python 3 is required, along with the libraries listed in
 `requirements.txt`.
 
 To generate the final bundle, run:
@@ -39,29 +42,58 @@ To generate the final bundle, run:
 ./do_all.sh
 ```
 This process may take up to ten minutes to download all certificates and construct
-the full chains. It produces the file `eu_web_and_chain.pem`.
+the full chains. It produces three files:
 
-Apache SSLRequire Directives
+- `eu_selection_ca_certs.pem`: all EU-qualified web authentication CA
+  certificates extracted from the national trusted lists.
+- `eu_validation_ca_certs.pem`: only the additional intermediate and root CA
+  certificates that this project collects (via AIA, the certificates of the
+  national trusted lists and `eu_chain_missing.pem`) to complete the chains.
+- `eu_full_chains.pem`: the combined bundle of the two files above, for
+  systems that expect a single file.
 
-After running `do_all.sh` and generating the merged certificate files, you can 
-generate Apache SSLRequire directives based on the web certificates only:
+## Airlock Gateway Configuration
+
+Airlock Gateway configures the client certificate CAs per virtual host, in two
+separate form fields. In the Configuration Center open
+*Application Firewall → Reverse Proxy*, edit the virtual host that terminates
+the PSD2 client TLS connections, and switch to the tab *Client Certificates*,
+section *Certificate Authority* (see the
+[Airlock Gateway documentation](https://docs.airlock.com/gateway/latest/index/1574686289416.html)).
+Paste the PEM content of the generated files as follows:
+
+- **CAs for client certificate selection**: paste the content of `eu_selection_ca_certs.pem`.
+  The subject DNs of these CAs are announced to the client during the TLS
+  handshake (`certificate_authorities` list in the CertificateRequest
+  message), so the client can select a matching certificate. Only the EU-qualified web
+  authentication CAs belong here.
+- **CAs for chain validation and OCSP server validation**: paste the content
+  of `eu_validation_ca_certs.pem`. These certificates are only used server-side to
+  validate the certificate chain up to the root; they are not announced to
+  the client.
+
+### Accept Only Client Certificates Issued by EU CAs
+
+The configuration above checks that the client certificate chains up to one
+of the configured root CAs. Some EU CAs operate under large commercial root
+CAs, and those roots also sign certificates for entirely different customers.
+A client certificate from such an unrelated CA would therefore pass the chain
+validation as well. This step closes that gap: it additionally requires that
+the client certificate was issued directly by one of the EU web
+authentication CAs. It is technically not required, but we recommend it.
+
+Generate Apache `Require expr` directives that compare the issuer DN of the
+client certificate (`SSL_CLIENT_I_DN`) against the subject DNs of all CAs in
+`eu_selection_ca_certs.pem`:
 
 ```
-./get_apache_restrictions.py eu_web.pem
+./get_apache_restrictions.py eu_selection_ca_certs.pem
 ```
 
-The output prints SSLRequire directives to standard output. Redirect the output 
-to a file to use it in an Apache Location block. Using issuer DNs from the 
-original EU web certificates ensures that only trusted CAs are allowed and 
-prevents arbitrary chains from other roots, which could introduce security 
-risks. The merged file `eu_web_and_chain.pem` is not used for the SSLRequire 
-directives but is needed for verification
+**Paste the printed directives into the Apache expert settings of the
+corresponding mapping.** See the
+[Apache documentation of Require expr](https://httpd.apache.org/docs/2.4/mod/mod_authz_core.html#reqexpr)
+for details.
 
 ## Disclaimer
 This software is provided as source code under an MIT license (see LICENSE).
-
-## Security
-The European Trust List Browser provides limited security on the API. The API 
-is offered over TLS, so it is possible to ascertain the source of the 
-information. The information itself is not signed, so the authenticity and 
-integrity cannot be fully validated.

@@ -92,7 +92,7 @@ def main():
         try:
             print(f"  Valid  : {cert.not_valid_before_utc.isoformat()}  →  {cert.not_valid_after_utc.isoformat()}")
         except AttributeError:
-            print(f"  Valid  : {cert.not_valid_before.isoformat()}  →  {cert.not_valid_after.isoformat()}")
+            print(f"  Valid  : {cert.not_valid_before_utc.isoformat()}  →  {cert.not_valid_after_utc.isoformat()}")
         print()
 
         try:

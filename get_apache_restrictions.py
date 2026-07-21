@@ -57,11 +57,17 @@ def main():
     for block in cert_blocks:
         dn = get_subject_dn(block)
         if dn:
-            dn_conditions.append(f"%{{SSL_CLIENT_I_DN}} eq '{dn}'")
+            # ap_expr interprets backslash escapes inside string literals,
+            # so double them to preserve the RFC2253 escaping of the DN
+            dn = dn.replace("\\", "\\\\")
+            dn_conditions.append(f"%{{SSL_CLIENT_I_DN}} == '{dn}'")
 
-    print('SSLRequire (\\')
-    print(' || \\\n'.join(f'    {c}' for c in sorted(dn_conditions)) + ' \\')
-    print(')')
+    # The output is meant for a directory context, e.g. the Airlock
+    # mapping expert settings (location context)
+    print('<RequireAny>')
+    for c in sorted(dn_conditions):
+        print(f'    Require expr {c}')
+    print('</RequireAny>')
 
 if __name__ == '__main__':
     main()

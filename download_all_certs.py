@@ -3,7 +3,6 @@
 Download all X.509 certificates from the EU Trusted List (LOTL) and national TSLs.
 """
 
-import requests
 import xml.etree.ElementTree as ET
 import base64
 from cryptography import x509
@@ -13,7 +12,7 @@ import os
 import sys
 import warnings
 
-from cert_lib import cert_is_valid_now, remove_duplicate_certs
+from cert_lib import cert_is_valid_now, remove_duplicate_certs, download_with_retry
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -21,9 +20,10 @@ LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 
 
 def download_xml(url):
-    r = requests.get(url, verify=False, timeout=30)
-    r.raise_for_status()
-    return r.content
+    content = download_with_retry(url)
+    if content is None:
+        raise RuntimeError(f"Failed to download {url}")
+    return content
 
 
 def _log_cert_bytes(pem_bytes: bytes):

@@ -1,5 +1,4 @@
-lxml
-docopt
-datetime
 cryptography
 requests
+urllib3
+pyOpenSSL

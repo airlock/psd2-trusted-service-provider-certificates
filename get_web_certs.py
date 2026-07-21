@@ -12,28 +12,23 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
-import requests
 import urllib3
 import xml.etree.ElementTree as ET
 
-from cert_lib import cert_is_valid_now, remove_duplicate_certs
+from cert_lib import cert_is_valid_now, remove_duplicate_certs, download_with_retry
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LOTL_URL = "https://ec.europa.eu/tools/lotl/eu-lotl.xml"
 TARGET_EXT = "http://uri.etsi.org/TrstSvc/TrustedList/SvcInfoExt/ForWebSiteAuthentication"
-TIMEOUT = 30
-USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
 
 
 def download_xml(url: str) -> bytes:
-    try:
-        r = requests.get(url, verify=False, timeout=TIMEOUT, headers={"User-Agent": USER_AGENT})
-        r.raise_for_status()
-        return r.content
-    except Exception as e:
-        print(f"WARNING: Failed to download {url}: {e}")
+    content = download_with_retry(url)
+    if content is None:
+        print(f"WARNING: Failed to download {url}", file=sys.stderr)
         return b""
+    return content
 
 
 def get_tsl_urls() -> list[str]:

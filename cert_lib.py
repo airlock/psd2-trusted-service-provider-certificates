@@ -10,6 +10,8 @@ import datetime
 import hashlib
 import os
 import re
+import sys
+import time
 from typing import List, Optional, Tuple, Union
 
 import requests
@@ -63,8 +65,8 @@ def cert_is_valid_now(cert_bytes: bytes) -> bool:
     cert_bytes: PEM or DER encoded certificate
     """
     cert = load_certificate(cert_bytes)
-    now = datetime.datetime.utcnow()
-    return cert.not_valid_before <= now <= cert.not_valid_after
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return cert.not_valid_before_utc <= now <= cert.not_valid_after_utc
 
 
 def load_pem_file(
@@ -165,25 +167,39 @@ def get_common_name(name: x509.Name, default: str = "Unknown") -> str:
     return cn_attrs[0].value if cn_attrs else default
 
 
+# Some endpoints (e.g. the Spanish one) block downloads with Python's default User-Agent
+USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
+
 def download_with_retry(
     url: str,
     *,
-    timeout: int = 30,
+    timeout: int = 60,
     verify: bool = False,
     as_certificate: bool = False,
+    retries: int = 3,
+    backoff: float = 1.0,
 ) -> Optional[Union[bytes, x509.Certificate]]:
-    """Download content via HTTP with error handling.
+    """Download content via HTTP with retries and exponential backoff.
+
+    Transient errors (connection resets, timeouts, HTTP 5xx) are retried
+    silently; HTTP 4xx errors are treated as permanent and fail immediately.
+    Only final failures are logged to stderr.
 
     Parameters
     ----------
     url : str
         URL to download.
     timeout : int, optional
-        Request timeout in seconds (default: 30).
+        Request timeout in seconds (default: 60).
     verify : bool, optional
         Enable SSL certificate verification (default: False).
     as_certificate : bool, optional
         If True, parse and return as x509.Certificate (tries PEM then DER) (default: False).
+    retries : int, optional
+        Number of retries after the first failed attempt (default: 3).
+    backoff : float, optional
+        Initial delay in seconds between attempts, doubled each retry (default: 1.0).
 
     Returns
     -------
@@ -196,20 +212,34 @@ def download_with_retry(
     if not url.lower().startswith(("http://", "https://")):
         return None
 
-    try:
-        r = requests.get(url, timeout=timeout, verify=verify)
-        r.raise_for_status()
-        content = r.content
+    last_error: Optional[Exception] = None
+    for attempt in range(retries + 1):
+        try:
+            r = requests.get(url, timeout=timeout, verify=verify,
+                             headers={"User-Agent": USER_AGENT})
+            r.raise_for_status()
+            content = r.content
 
-        if as_certificate:
-            try:
-                return load_certificate(content)
-            except ValueError:
-                return None
+            if as_certificate:
+                try:
+                    return load_certificate(content)
+                except ValueError:
+                    return None
 
-        return content
-    except Exception:
-        return None
+            return content
+        except requests.HTTPError as e:
+            last_error = e
+            status = getattr(e.response, "status_code", None)
+            if status is not None and status < 500:
+                break  # client error, retrying will not help
+        except Exception as e:
+            last_error = e
+
+        if attempt < retries:
+            time.sleep(backoff * (2 ** attempt))
+
+    print(f"WARNING: giving up on {url}: {last_error}", file=sys.stderr)
+    return None
 
 
 def remove_duplicate_certs(pem_certs: list[bytes]) -> list[bytes]:
