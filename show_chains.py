@@ -26,6 +26,17 @@ def get_issuer_cn(cert):
     return get_common_name(cert.issuer, default="Unknown CN")
 
 
+def get_issuer_ski(cert):
+    """Get the issuer's SKI from the Authority Key Identifier, or None."""
+    try:
+        aki = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+        if aki.key_identifier:
+            return aki.key_identifier.hex()
+    except Exception:
+        pass
+    return None
+
+
 def build_subject_map(certs):
     """Map subjects to certificates for O(1) lookup during chain building"""
     subject_map = {}
@@ -56,7 +67,7 @@ def main():
     for cert, _ in leaf_certs:
         leaf_ski = get_subject_key_identifier(cert)
         files_str = ", ".join(sorted(ski_to_files.get(leaf_ski, [])))
-        print(f"LEAF ID={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)} ({files_str})")
+        print(f"SKI={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)} ({files_str})")
 
         if cert.issuer == cert.subject:
             print("  Chain length: 1\n")
@@ -91,7 +102,7 @@ def main():
                 indent = "    " if pos == "ROOT" else ""
                 ski_chain = get_subject_key_identifier(c_chain)
                 files_chain = ", ".join(sorted(ski_to_files.get(ski_chain, [])))
-                print(f"{indent}{pos} ID={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)} ({files_chain})")
+                print(f"{indent}{pos} SKI={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)} ({files_chain})")
             print(f"  Chain length: {len(chain) + 1}\n")
         else:
             incomplete_chains.append((cert, chain))
@@ -100,11 +111,12 @@ def main():
         print("\nINCOMPLETE CHAINS:")
         for cert, chain in incomplete_chains:
             leaf_ski = get_subject_key_identifier(cert)
-            print(f"LEAF ID={leaf_ski} | CN={get_cn(cert)} | ISSUER={get_issuer_cn(cert)}")
-            for pos, c_chain in chain:
-                ski_chain = get_subject_key_identifier(c_chain)
-                print(f"  {pos} ID={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)}")
-            print("  Chain not complete\n")
+            last_cert = chain[-1][1] if chain else cert
+            missing = f"CN={get_issuer_cn(last_cert)}"
+            missing_ski = get_issuer_ski(last_cert)
+            if missing_ski:
+                missing += f" (SKI={missing_ski})"
+            print(f"SKI={leaf_ski} | CN={get_cn(cert)} | MISSING: {missing}")
 
 if __name__ == "__main__":
     main()

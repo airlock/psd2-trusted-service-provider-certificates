@@ -41,7 +41,7 @@ def main():
     max_chain_len = 0
     current_id = None
     for line in output.splitlines():
-        leaf_match = re.match(r"LEAF ID=([0-9a-f]+)", line)
+        leaf_match = re.match(r"SKI=([0-9a-f]+)", line)
         if leaf_match:
             current_id = leaf_match.group(1)
         if "Chain not complete" in line and current_id:
