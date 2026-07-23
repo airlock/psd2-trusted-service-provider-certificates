@@ -71,6 +71,8 @@ Paste the PEM content of the generated files as follows:
   of `eu_validation_ca_certs.pem`. These certificates are only used server-side to
   validate the certificate chain up to the root; they are not announced to
   the client.
+- **Chain verification depth**: enter the `Max chain length` value printed by
+  `./do_all.sh`.
 
 ### Accept Only Client Certificates Issued by EU CAs
 

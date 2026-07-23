@@ -63,6 +63,7 @@ def main():
             ski_to_files.setdefault(ski, set()).add(file)
 
     incomplete_chains = []
+    max_chain_length = 0
 
     for cert, _ in leaf_certs:
         leaf_ski = get_subject_key_identifier(cert)
@@ -71,6 +72,7 @@ def main():
 
         if cert.issuer == cert.subject:
             print("  Chain length: 1\n")
+            max_chain_length = max(max_chain_length, 1)
             continue
 
         current_cert = cert
@@ -104,8 +106,14 @@ def main():
                 files_chain = ", ".join(sorted(ski_to_files.get(ski_chain, [])))
                 print(f"{indent}{pos} SKI={ski_chain} | CN={get_cn(c_chain)} | ISSUER={get_issuer_cn(c_chain)} ({files_chain})")
             print(f"  Chain length: {len(chain) + 1}\n")
+            max_chain_length = max(max_chain_length, len(chain) + 1)
         else:
             incomplete_chains.append((cert, chain))
+
+    # The chain length counts the CA certificates from the client certificate's
+    # issuer up to and including the root, which is exactly how Airlock counts
+    # the "Chain verification depth" (the client certificate itself is depth 0).
+    print(f"Max chain length: {max_chain_length}")
 
     if incomplete_chains:
         print("\nINCOMPLETE CHAINS:")

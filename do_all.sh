@@ -33,8 +33,11 @@ cat eu_chain_missing.pem >> "$POOL_CERTS_FILE"
 echo "Building the certificate chains..."
 ./download_chain.py "$SELECTION_CA_CERTS_FILE" "$POOL_CERTS_FILE" "$OUTPUT_CHAIN_FILE" >>error.log 2>&1
 
-# Show incomplete chains only
-INCOMPLETE_CHAINS=$(./show_chains.py "$SELECTION_CA_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log | awk '/INCOMPLETE CHAINS:/ {flag=1; next} flag')
+# Analyze the chains: report incomplete ones and determine the maximum
+# chain length (= Airlock "Chain verification depth", see README)
+CHAINS_OUTPUT=$(./show_chains.py "$SELECTION_CA_CERTS_FILE" "$OUTPUT_CHAIN_FILE" 2>>error.log)
+MAX_CHAIN_LENGTH=$(echo "$CHAINS_OUTPUT" | awk '/^Max chain length:/ {print $NF}')
+INCOMPLETE_CHAINS=$(echo "$CHAINS_OUTPUT" | awk '/INCOMPLETE CHAINS:/ {flag=1; next} flag')
 if [[ -n "$INCOMPLETE_CHAINS" ]]; then
     echo "Incomplete certificate chains detected:"
     echo "$INCOMPLETE_CHAINS"
@@ -75,4 +78,6 @@ echo "  $SELECTION_CA_CERTS_FILE ($(count_certs "$SELECTION_CA_CERTS_FILE") cert
 echo "    (Distinguished Names: $(dn_list_size "$SELECTION_CA_CERTS_FILE") bytes)"
 echo "  $VALIDATION_CA_CERTS_FILE ($(count_certs "$VALIDATION_CA_CERTS_FILE") certificates) -> CAs for chain validation"
 echo "  $FULL_CHAINS_FILE ($(count_certs "$FULL_CHAINS_FILE") certificates) -> combined bundle"
+echo
+echo "Max chain length: $MAX_CHAIN_LENGTH"
 
